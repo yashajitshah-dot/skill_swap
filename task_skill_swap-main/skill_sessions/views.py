@@ -110,7 +110,7 @@ class RequestResponseView(LoginRequiredMixin, UpdateView):
     model = SkillSwapRequest
     form_class = RequestResponseForm
     template_name = 'skill_sessions/request_response.html'
-    success_url = reverse_lazy('skill_sessions:received_requests')
+    success_url = reverse_lazy('core:requests')
     
     def get_queryset(self):
         return SkillSwapRequest.objects.filter(recipient=self.request.user)
@@ -213,7 +213,22 @@ def cancel_request(request, pk):
     request_obj = get_object_or_404(SkillSwapRequest, pk=pk, requester=request.user)
     request_obj.status = 'cancelled'
     request_obj.save()
-    return redirect('skill_sessions:request_list')
+    
+    # Create notification for the recipient
+    from accounts.models import Notification
+    Notification.objects.create(
+        recipient=request_obj.recipient,
+        notification_type='request_declined', 
+        title='Request Cancelled',
+        message=f'{request.user.get_full_name() or request.user.username} cancelled their skill swap request for {request_obj.offered_skill.skill.name}.',
+        related_user=request.user,
+        related_object_id=request_obj.id
+    )
+    
+    from django.contrib import messages
+    messages.success(request, 'Request cancelled successfully.')
+    
+    return redirect('core:requests')
 
 
 class SessionListView(LoginRequiredMixin, ListView):
