@@ -182,7 +182,27 @@ class SearchView:
 class NotificationListView:
     @classmethod
     def as_view(cls):
-        return lambda r: render(r, "core/notifications.html")
+        @login_required
+        def notification_view(request):
+            from accounts.models import Notification
+            
+            # Get all notifications for the current user
+            notifications = Notification.objects.filter(
+                recipient=request.user
+            ).order_by('-created_at')
+            
+            # Mark all unread notifications as read when viewing the page
+            unread_notifications = notifications.filter(is_read=False)
+            unread_notifications.update(is_read=True)
+            
+            context = {
+                'notifications': notifications,
+                'unread_count': 0,  # Now 0 since we marked them as read
+            }
+            
+            return render(request, "core/notifications.html", context)
+            
+        return notification_view
 
 def mark_notification_read(request, notification_id):
     from accounts.models import Notification
