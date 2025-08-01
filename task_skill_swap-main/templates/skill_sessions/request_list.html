@@ -36,14 +36,14 @@
                     <i class="fas fa-clock text-yellow-600 text-2xl"></i>
                 </div>
                 <div class="text-3xl font-bold text-gray-800 mb-2">
-                    {{ requests|default_if_none:''|length|add:0 }}
-                    {% with pending_count=requests|default:''|length %}
-                        {% for request in requests %}
-                            {% if request.status == 'pending' and forloop.first %}
-                                {{ requests|select:'status:pending'|length|default:0 }}
-                            {% endif %}
-                        {% endfor %}
-                    {% endwith %}
+                    {% regroup requests by status as grouped_requests %}
+                    {% for group in grouped_requests %}
+                        {% if group.grouper == 'pending' %}
+                            {{ group.list|length }}
+                        {% endif %}
+                    {% empty %}
+                        0
+                    {% endfor %}
                 </div>
                 <div class="text-gray-600">Pending Requests</div>
             </div>
@@ -52,13 +52,14 @@
                     <i class="fas fa-check-circle text-green-600 text-2xl"></i>
                 </div>
                 <div class="text-3xl font-bold text-gray-800 mb-2">
-                    {% with accepted_count=0 %}
-                        {% for request in requests %}
-                            {% if request.status == 'accepted' %}
-                                {{ forloop.counter }}
-                            {% endif %}
-                        {% endfor %}
-                    {% endwith %}
+                    {% regroup requests by status as grouped_requests %}
+                    {% for group in grouped_requests %}
+                        {% if group.grouper == 'accepted' %}
+                            {{ group.list|length }}
+                        {% endif %}
+                    {% empty %}
+                        0
+                    {% endfor %}
                 </div>
                 <div class="text-gray-600">Accepted Requests</div>
             </div>
