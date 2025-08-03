@@ -6,6 +6,8 @@ from django.views.generic import ListView, DetailView, CreateView, UpdateView
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.db import models
+from django.http import JsonResponse
+from django.views.decorators.http import require_http_methods
 
 from .models import SkillSwapRequest, SkillSwapSession, SessionReview
 from .forms import SkillSwapRequestForm, RequestResponseForm, SessionScheduleForm, SessionReviewForm
@@ -528,3 +530,304 @@ def reject_session(request, session_id):
         messages.info(request, f'Session request from {swap_request.requester.username} has been rejected.')
     
     return redirect('skill_sessions:session_management')
+
+
+@login_required
+def session_requests_management(request):
+    """Comprehensive session requests management with accept/reject functionality"""
+    from accounts.models import Notification
+    
+    # Get received requests
+    received_requests = SkillSwapRequest.objects.filter(
+        recipient=request.user
+    ).select_related('requester', 'offered_skill', 'offered_skill__skill').order_by('-created_at')
+    
+    # Get sent requests
+    sent_requests = SkillSwapRequest.objects.filter(
+        requester=request.user
+    ).select_related('recipient', 'offered_skill', 'offered_skill__skill').order_by('-created_at')
+    
+    # Get scheduled sessions
+    scheduled_sessions = SkillSwapSession.objects.filter(
+        models.Q(teacher=request.user) | models.Q(learner=request.user),
+        status='scheduled'
+    ).select_related('teacher', 'learner', 'skill').order_by('scheduled_date')
+    
+    # Get completed sessions for history
+    completed_sessions = SkillSwapSession.objects.filter(
+        models.Q(teacher=request.user) | models.Q(learner=request.user),
+        status='completed'
+    ).select_related('teacher', 'learner', 'skill').order_by('-scheduled_date')[:10]
+    
+    # Filter by type for each category
+    pending_received = received_requests.filter(status='pending')
+    pending_sent = sent_requests.filter(status='pending')
+    accepted_requests = received_requests.filter(status='accepted')
+    
+    context = {
+        'received_requests': received_requests,
+        'sent_requests': sent_requests,
+        'scheduled_sessions': scheduled_sessions,
+        'completed_sessions': completed_sessions,
+        'pending_received': pending_received,
+        'pending_sent': pending_sent,
+        'accepted_requests': accepted_requests,
+    }
+    
+    return render(request, 'skill_sessions/session_requests_management.html', context)
+
+
+@login_required
+def my_sessions_view(request):
+    """My Sessions page accessible from profile dropdown with dynamic data"""
+    from accounts.models import Notification
+    from django.utils import timezone
+    
+    # Get all sessions for the user
+    all_sessions = SkillSwapSession.objects.filter(
+        models.Q(teacher=request.user) | models.Q(learner=request.user)
+    ).select_related('teacher', 'learner', 'skill').order_by('-scheduled_date')
+    
+    # Get upcoming sessions
+    upcoming_sessions = all_sessions.filter(
+        status='scheduled',
+        scheduled_date__gte=timezone.now()
+    ).order_by('scheduled_date')
+    
+    # Get completed sessions
+    completed_sessions = all_sessions.filter(status='completed')
+    
+    # Get pending requests count
+    pending_requests_count = SkillSwapRequest.objects.filter(
+        recipient=request.user,
+        status='pending'
+    ).count()
+    
+    # Calculate stats
+    total_sessions = all_sessions.count()
+    upcoming_sessions_count = upcoming_sessions.count()
+    completed_sessions_count = completed_sessions.count()
+    
+    # Generate recent activities (mock data - you can enhance this)
+    recent_activities = []
+    
+    # Add recent completed sessions as activities
+    for session in completed_sessions[:5]:
+        if session.teacher == request.user:
+            activity_type = 'session_completed'
+            title = f"Completed teaching {session.skill.name}"
+            description = f"Successfully taught {session.skill.name} to {session.learner.get_full_name()}"
+        else:
+            activity_type = 'session_completed'
+            title = f"Completed learning {session.skill.name}"
+            description = f"Successfully learned {session.skill.name} from {session.teacher.get_full_name()}"
+        
+        recent_activities.append({
+            'type': activity_type,
+            'title': title,
+            'description': description,
+            'created_at': session.ended_at or session.scheduled_date,
+            'action_url': f'/sessions/{session.id}/',
+            'action_text': 'View Details'
+        })
+    
+    # Add recent notifications as activities
+    recent_notifications = Notification.objects.filter(
+        recipient=request.user
+    ).order_by('-created_at')[:3]
+    
+    for notification in recent_notifications:
+        recent_activities.append({
+            'type': notification.notification_type,
+            'title': notification.title,
+            'description': notification.message,
+            'created_at': notification.created_at,
+            'action_url': None,
+            'action_text': None
+        })
+    
+    # Sort activities by date
+    recent_activities.sort(key=lambda x: x['created_at'], reverse=True)
+    recent_activities = recent_activities[:10]  # Limit to 10 most recent
+    
+    context = {
+        'all_sessions': all_sessions,
+        'upcoming_sessions': upcoming_sessions,
+        'completed_sessions': completed_sessions,
+        'total_sessions': total_sessions,
+        'upcoming_sessions_count': upcoming_sessions_count,
+        'completed_sessions_count': completed_sessions_count,
+        'pending_requests_count': pending_requests_count,
+        'recent_activities': recent_activities,
+        'now': timezone.now(),
+    }
+    
+    return render(request, 'skill_sessions/my_sessions.html', context)
+
+
+@login_required
+@require_http_methods(["POST"])
+def handle_request_action(request, request_id, action):
+    """Handle accept/reject actions for session requests via AJAX"""
+    import json
+    from accounts.views import create_notification
+    
+    try:
+        swap_request = SkillSwapRequest.objects.get(
+            id=request_id, 
+            recipient=request.user, 
+            status='pending'
+        )
+        
+        data = json.loads(request.body) if request.body else {}
+        response_message = data.get('response_message', '')
+        
+        if action == 'accept':
+            swap_request.status = 'accepted'
+            swap_request.responded_at = timezone.now()
+            swap_request.response_message = response_message
+            swap_request.save()
+            
+            # Create a session
+            session = SkillSwapSession.objects.create(
+                request=swap_request,
+                teacher=swap_request.recipient,
+                learner=swap_request.requester,
+                skill=swap_request.offered_skill.skill,
+                scheduled_date=timezone.now() + timezone.timedelta(days=1),
+                duration_minutes=swap_request.proposed_duration,
+                format=swap_request.proposed_format,
+                location=swap_request.proposed_location,
+                status='scheduled'
+            )
+            
+            # Create notification for requester
+            create_notification(
+                recipient=swap_request.requester,
+                notification_type='request_accepted',
+                title='Session Request Accepted!',
+                message=f'{swap_request.recipient.get_full_name()} accepted your request to learn {swap_request.offered_skill.skill.name}.',
+                related_user=swap_request.recipient,
+                related_object_id=session.id
+            )
+            
+            return JsonResponse({
+                'success': True, 
+                'message': 'Request accepted successfully!',
+                'session_id': session.id
+            })
+            
+        elif action == 'reject':
+            swap_request.status = 'declined'
+            swap_request.responded_at = timezone.now()
+            swap_request.response_message = response_message
+            swap_request.save()
+            
+            # Create notification for requester
+            create_notification(
+                recipient=swap_request.requester,
+                notification_type='request_declined',
+                title='Session Request Declined',
+                message=f'{swap_request.recipient.get_full_name()} declined your request to learn {swap_request.offered_skill.skill.name}.',
+                related_user=swap_request.recipient,
+                related_object_id=swap_request.id
+            )
+            
+            return JsonResponse({
+                'success': True, 
+                'message': 'Request declined successfully!'
+            })
+        
+        else:
+            return JsonResponse({
+                'success': False, 
+                'error': 'Invalid action'
+            })
+            
+    except SkillSwapRequest.DoesNotExist:
+        return JsonResponse({
+            'success': False, 
+            'error': 'Request not found or already processed'
+        })
+    except Exception as e:
+        return JsonResponse({
+            'success': False, 
+            'error': str(e)
+        })
+
+
+@login_required
+@require_http_methods(["POST"])
+def cancel_request(request, request_id):
+    """Cancel a sent request"""
+    try:
+        swap_request = SkillSwapRequest.objects.get(
+            id=request_id, 
+            requester=request.user, 
+            status='pending'
+        )
+        
+        swap_request.status = 'cancelled'
+        swap_request.save()
+        
+        # Notify recipient
+        from accounts.views import create_notification
+        create_notification(
+            recipient=swap_request.recipient,
+            notification_type='system',
+            title='Session Request Cancelled',
+            message=f'{swap_request.requester.get_full_name()} cancelled their request to learn {swap_request.offered_skill.skill.name}.',
+            related_user=swap_request.requester,
+            related_object_id=swap_request.id
+        )
+        
+        return JsonResponse({
+            'success': True, 
+            'message': 'Request cancelled successfully!'
+        })
+        
+    except SkillSwapRequest.DoesNotExist:
+        return JsonResponse({
+            'success': False, 
+            'error': 'Request not found or cannot be cancelled'
+        })
+
+
+@login_required
+@require_http_methods(["POST"])
+def start_session(request, session_id):
+    """Start a session"""
+    try:
+        session = SkillSwapSession.objects.get(
+            id=session_id,
+            status='scheduled'
+        )
+        
+        # Check if user is participant
+        if request.user not in [session.teacher, session.learner]:
+            return JsonResponse({
+                'success': False, 
+                'error': 'You are not a participant in this session'
+            })
+        
+        # Check if session can be started (within time window)
+        if session.can_start():
+            session.status = 'in_progress'
+            session.started_at = timezone.now()
+            session.save()
+            
+            return JsonResponse({
+                'success': True, 
+                'message': 'Session started successfully!'
+            })
+        else:
+            return JsonResponse({
+                'success': False, 
+                'error': 'Session cannot be started yet'
+            })
+            
+    except SkillSwapSession.DoesNotExist:
+        return JsonResponse({
+            'success': False, 
+            'error': 'Session not found'
+        })

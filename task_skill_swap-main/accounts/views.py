@@ -133,15 +133,6 @@ class EmailVerificationSentView(TemplateView):
     template_name = 'accounts/email_verification_sent.html'
 
 
-@login_required
-def mark_notification_read(request, notification_id):
-    """Mark notification as read"""
-    notification = get_object_or_404(Notification, id=notification_id, recipient=request.user)
-    notification.is_read = True
-    notification.save()
-    return HttpResponseRedirect(request.META.get('HTTP_REFERER', reverse_lazy('accounts:profile')))
-
-
 User = get_user_model()
 
 class ForgotPasswordView(View):
@@ -231,3 +222,138 @@ def get_branches(request):
         return JsonResponse({'branches': branches_list})
     except Department.DoesNotExist:
         return JsonResponse({'branches': []})
+
+
+@login_required
+def user_profile_details(request, user_id):
+    """View detailed user profile with skills, ratings, and session history"""
+    from skills.models import OfferedSkill, DesiredSkill
+    from skill_sessions.models import SessionReview, SkillSwapSession
+    
+    profile_user = get_object_or_404(User, id=user_id)
+    
+    # Get user's skills
+    offered_skills = OfferedSkill.objects.filter(user=profile_user, is_active=True).select_related('skill', 'skill__category')
+    desired_skills = DesiredSkill.objects.filter(user=profile_user, is_active=True).select_related('skill', 'skill__category')
+    
+    # Get recent reviews (limit to 5 most recent)
+    recent_reviews = SessionReview.objects.filter(
+        reviewee=profile_user, 
+        is_public=True
+    ).select_related('reviewer', 'session', 'session__skill').order_by('-created_at')[:5]
+    
+    # Get all reviews count
+    all_reviews_count = SessionReview.objects.filter(reviewee=profile_user, is_public=True).count()
+    
+    # Calculate total connections (unique users they've had sessions with)
+    teaching_sessions = SkillSwapSession.objects.filter(teacher=profile_user, status='completed')
+    learning_sessions = SkillSwapSession.objects.filter(learner=profile_user, status='completed')
+    
+    connected_users = set()
+    for session in teaching_sessions:
+        connected_users.add(session.learner.id)
+    for session in learning_sessions:
+        connected_users.add(session.teacher.id)
+    
+    total_connections = len(connected_users)
+    
+    # Recent achievements (placeholder - you can implement achievement system)
+    recent_achievements = []
+    
+    context = {
+        'profile_user': profile_user,
+        'offered_skills': offered_skills,
+        'desired_skills': desired_skills,
+        'recent_reviews': recent_reviews,
+        'all_reviews_count': all_reviews_count,
+        'total_connections': total_connections,
+        'recent_achievements': recent_achievements,
+    }
+    
+    return render(request, 'accounts/user_profile_details.html', context)
+
+
+@login_required
+def notifications_view(request):
+    """View and manage user notifications"""
+    notifications = Notification.objects.filter(recipient=request.user).order_by('-created_at')
+    
+    # Apply filters if any
+    filter_type = request.GET.get('filter')
+    if filter_type and filter_type != 'all':
+        if filter_type == 'unread':
+            notifications = notifications.filter(is_read=False)
+        else:
+            notifications = notifications.filter(notification_type=filter_type)
+    
+    # Pagination
+    from django.core.paginator import Paginator
+    paginator = Paginator(notifications, 20)  # Show 20 notifications per page
+    page_number = request.GET.get('page')
+    notifications_page = paginator.get_page(page_number)
+    
+    unread_count = Notification.objects.filter(recipient=request.user, is_read=False).count()
+    total_count = Notification.objects.filter(recipient=request.user).count()
+    
+    context = {
+        'notifications': notifications_page,
+        'unread_count': unread_count,
+        'total_count': total_count,
+        'has_more': notifications_page.has_next(),
+        'next_page': notifications_page.next_page_number() if notifications_page.has_next() else None,
+    }
+    
+    return render(request, 'accounts/notifications.html', context)
+
+
+@login_required
+@require_http_methods(["POST"])
+def mark_notification_read(request, notification_id):
+    """Mark a specific notification as read"""
+    try:
+        notification = Notification.objects.get(id=notification_id, recipient=request.user)
+        notification.is_read = True
+        notification.save()
+        return JsonResponse({'success': True, 'message': 'Notification marked as read'})
+    except Notification.DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Notification not found'})
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def delete_notification(request, notification_id):
+    """Delete a specific notification"""
+    try:
+        notification = Notification.objects.get(id=notification_id, recipient=request.user)
+        notification.delete()
+        return JsonResponse({'success': True, 'message': 'Notification deleted'})
+    except Notification.DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Notification not found'})
+
+
+@login_required
+@require_http_methods(["POST"])
+def mark_all_notifications_read(request):
+    """Mark all notifications as read for the current user"""
+    Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
+    return JsonResponse({'success': True, 'message': 'All notifications marked as read'})
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def delete_read_notifications(request):
+    """Delete all read notifications for the current user"""
+    deleted_count = Notification.objects.filter(recipient=request.user, is_read=True).delete()[0]
+    return JsonResponse({'success': True, 'message': f'{deleted_count} notifications deleted'})
+
+
+def create_notification(recipient, notification_type, title, message, related_user=None, related_object_id=None):
+    """Utility function to create notifications"""
+    return Notification.objects.create(
+        recipient=recipient,
+        notification_type=notification_type,
+        title=title,
+        message=message,
+        related_user=related_user,
+        related_object_id=related_object_id
+    )

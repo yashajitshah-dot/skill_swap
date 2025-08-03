@@ -16,6 +16,16 @@ urlpatterns = [
     path('profile/edit/', views.ProfileEditView.as_view(), name='profile_edit'),
     path('profile/complete/', views.ProfileCompleteView.as_view(), name='profile_complete'),
     
+    # User profile details (view-only detailed profile)
+    path('user/<int:user_id>/details/', views.user_profile_details, name='profile_details'),
+    
+    # Notifications
+    path('notifications/', views.notifications_view, name='notifications'),
+    path('notifications/<int:notification_id>/mark-read/', views.mark_notification_read, name='mark_notification_read'),
+    path('notifications/<int:notification_id>/delete/', views.delete_notification, name='delete_notification'),
+    path('notifications/mark-all-read/', views.mark_all_notifications_read, name='mark_all_notifications_read'),
+    path('notifications/delete-read/', views.delete_read_notifications, name='delete_read_notifications'),
+    
     # Password management
     path('password-change/', auth_views.PasswordChangeView.as_view(
         template_name='accounts/password_change.html',
