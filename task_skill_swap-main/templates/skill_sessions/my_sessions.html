@@ -125,7 +125,7 @@
                                     <span>{{ session.duration_minutes }} minutes</span>
                                 </div>
                                 <div class="flex items-center">
-                                    <i class="fas fa-{{ session.format == 'online' and 'video' or 'map-marker-alt' }} text-red-500 mr-2"></i>
+                                    <i class="fas fa-{{ session.format|session_format_icon }} text-red-500 mr-2"></i>
                                     <span>{{ session.get_format_display }}</span>
                                 </div>
                             </div>
@@ -328,7 +328,7 @@
                                                     <span>{{ session.duration_minutes }}min</span>
                                                 </div>
                                                 <div class="flex items-center">
-                                                    <i class="fas fa-{{ session.format == 'online' and 'video' or 'map-marker-alt' }} text-purple-500 mr-1"></i>
+                                                    <i class="fas fa-{{ session.format|session_format_icon }} text-purple-500 mr-1"></i>
                                                     <span>{{ session.get_format_display }}</span>
                                                 </div>
                                             </div>
@@ -344,7 +344,8 @@
                                             <i class="fas fa-play mr-1"></i>Start
                                         </button>
                                     {% elif session.status == 'completed' %}
-                                        {% if not session.reviews.filter(reviewer=user).exists %}
+                                        {% load session_tags %}
+                                        {% if not session|has_user_reviewed:user %}
                                             <a href="{% url 'skill_sessions:leave_review' session.id %}" 
                                                class="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition duration-200 font-semibold text-center">
                                                 <i class="fas fa-star mr-1"></i>Review
