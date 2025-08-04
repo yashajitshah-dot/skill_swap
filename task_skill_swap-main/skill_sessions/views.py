@@ -97,8 +97,6 @@ class SendRequestView(LoginRequiredMixin, CreateView):
 
 class RequestDetailView(LoginRequiredMixin, DetailView):
     model = SkillSwapRequest
-    template_name = 'skill_sessions/request_detail.html'
-    context_object_name = 'request'
     
     def get_queryset(self):
         return SkillSwapRequest.objects.filter(
@@ -106,6 +104,19 @@ class RequestDetailView(LoginRequiredMixin, DetailView):
         ) | SkillSwapRequest.objects.filter(
             recipient=self.request.user
         )
+    
+    def get(self, request, *args, **kwargs):
+        # Redirect to the other user's profile instead of showing request detail
+        request_obj = self.get_object()
+        if request_obj.requester == request.user:
+            # If current user is the requester, show recipient's profile
+            profile_user = request_obj.recipient
+        else:
+            # If current user is the recipient, show requester's profile
+            profile_user = request_obj.requester
+        
+        from django.shortcuts import redirect
+        return redirect('accounts:user_profile_details', user_id=profile_user.id)
 
 
 class RequestResponseView(LoginRequiredMixin, UpdateView):
@@ -308,6 +319,19 @@ class SessionDetailView(LoginRequiredMixin, DetailView):
     model = SkillSwapSession
     template_name = 'skill_sessions/session_detail.html'
     context_object_name = 'session'
+    
+    def get_object(self, queryset=None):
+        # Handle both pk and session_id URL parameters
+        pk = self.kwargs.get('pk') or self.kwargs.get('session_id')
+        if pk is None:
+            raise AttributeError("SessionDetailView must be called with either an object pk or session_id.")
+        
+        queryset = self.get_queryset()
+        try:
+            return queryset.get(pk=pk)
+        except SkillSwapSession.DoesNotExist:
+            from django.http import Http404
+            raise Http404("Session does not exist")
     
     def get_queryset(self):
         return SkillSwapSession.objects.filter(
